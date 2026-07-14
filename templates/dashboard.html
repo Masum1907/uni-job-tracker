@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Uni Job Tracker{% endblock %}
+{% block content %}
+
+<div class="toolbar">
+  <form method="POST" action="{{ url_for('check_now') }}" class="inline">
+    <button class="btn" type="submit">🔄 Check now</button>
+  </form>
+  <a class="btn btn-secondary" href="{{ url_for('dashboard', unread=1) }}">Unread only ({{ unread_count }})</a>
+  <a class="btn btn-secondary" href="{{ url_for('dashboard') }}">Show all</a>
+  {% if postings %}
+  <form method="POST" action="{{ url_for('mark_all_read') }}" class="inline">
+    <button class="btn btn-secondary" type="submit">Mark all read</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if not postings %}
+  <p style="color:#6b7280;">
+    No postings {{ 'to show yet' if not only_unread else 'unread' }}. Click
+    <strong>Check now</strong> to run the first scan, or wait for the
+    automatic background scan.
+  </p>
+{% else %}
+  <div style="display:flex; flex-direction:column; gap:10px;">
+  {% for p in postings %}
+    <div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; {{ 'opacity:0.55;' if p.is_read }}">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div>
+          <span class="badge">{{ p.uni_name }}</span>
+          {% if p.uni_type %}<span class="badge" style="background:#f3f4f6;color:#374151;">{{ p.uni_type }}</span>{% endif %}
+          <div style="margin-top:6px; font-size:15px; font-weight:600;">
+            <a href="{{ p.link }}" target="_blank" rel="noopener" style="color:var(--text); text-decoration:none;">
+              {{ p.title }}
+            </a>
+          </div>
+          <div style="font-size:12px; color:var(--muted); margin-top:4px;">
+            First seen: {{ p.first_seen[:16].replace('T',' ') }} UTC
+          </div>
+        </div>
+        {% if not p.is_read %}
+        <form method="POST" action="{{ url_for('mark_read', posting_id=p.id) }}">
+          <button class="btn btn-secondary" type="submit" style="font-size:12px; padding:5px 10px;">Mark read</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+{% endif %}
+
+{% endblock %}
