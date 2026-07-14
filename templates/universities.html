@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Manage Universities - Uni Job Tracker{% endblock %}
+{% block content %}
+
+<h2 style="font-size:16px;">Add one university</h2>
+<form method="POST" action="{{ url_for('add_university') }}" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:24px;">
+  <input name="name" placeholder="University name" required
+         style="flex:1; min-width:180px; padding:8px 10px; border:1px solid var(--border); border-radius:6px;">
+  <input name="url" placeholder="https://career-page-url.com" required
+         style="flex:2; min-width:220px; padding:8px 10px; border:1px solid var(--border); border-radius:6px;">
+  <input name="type" placeholder="public / private (optional)"
+         style="width:180px; padding:8px 10px; border:1px solid var(--border); border-radius:6px;">
+  <button class="btn" type="submit">Add</button>
+</form>
+
+<h2 style="font-size:16px;">Bulk add (one per line: <code>Name, URL</code>)</h2>
+<form method="POST" action="{{ url_for('bulk_add_universities') }}" style="margin-bottom:32px;">
+  <textarea name="bulk_text" rows="6" placeholder="Dhaka University, https://jobs.du.ac.bd/&#10;BRAC University, https://bracu.ac.bd/careers"
+    style="width:100%; padding:10px; border:1px solid var(--border); border-radius:6px; font-family:monospace; font-size:13px;"></textarea>
+  <div style="margin-top:8px;">
+    <button class="btn" type="submit">Add all</button>
+  </div>
+</form>
+
+<h2 style="font-size:16px;">Tracked universities ({{ universities|length }})</h2>
+<div style="display:flex; flex-direction:column; gap:8px;">
+{% for u in universities %}
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+    <div>
+      <strong>{{ u.name }}</strong>
+      {% if u.type %}<span class="badge" style="background:#f3f4f6;color:#374151;">{{ u.type }}</span>{% endif %}
+      <div style="font-size:13px; color:var(--muted);">
+        <a href="{{ u.url }}" target="_blank" rel="noopener">{{ u.url }}</a>
+      </div>
+      <div style="font-size:12px; color:var(--muted); margin-top:2px;">
+        {% if u.last_checked %}
+          Last checked: {{ u.last_checked[:16].replace('T',' ') }} UTC —
+          status: {{ u.last_status }}
+        {% else %}
+          Not checked yet
+        {% endif %}
+      </div>
+    </div>
+    <form method="POST" action="{{ url_for('delete_university', uni_id=u.id) }}"
+          onsubmit="return confirm('Remove {{ u.name }}?');">
+      <button class="btn btn-danger" type="submit">Remove</button>
+    </form>
+  </div>
+{% endfor %}
+</div>
+
+{% endblock %}
