@@ -4,26 +4,36 @@ layouts. It does NOT try to parse a specific site's HTML structure
 (impossible to hand-write for 100+ sites). Instead, for each page it:
 
   1. Pulls out every link (<a>) and its visible text.
-  2. Keeps only links whose text matches one of our KEYWORDS
-     (e.g. "lecturer", "job circular", "vacancy").
-  3. Flags any such link that we haven't recorded before as a new
-     posting.
-  4. If a page has NO matching links at all (e.g. some notice boards
-     render circulars as an image or plain paragraph, not a link),
-     it falls back to hashing the whole page and flags "page updated"
-     when the hash changes, so you at least know to go check it.
-
-This trades perfect precision for coverage across many unknown site
-structures, which is the only practical way to monitor 100+ pages
-you don't control.
+  2. Filters OUT obvious navigation/boilerplate (the "Career" link
+     itself, "Faculty of Arts", "Department of X", "Contact", etc.)
+     so those never get flagged as if they were job postings.
+  3. Keeps links whose text matches specific hiring phrases (e.g.
+     "lecturer", "job circular", "vacancy", "assistant professor").
+  4. If the homepage (or given URL) links to a "Career"/"Jobs"/
+     "Recruitment"/"Notice" style page, it automatically follows that
+     link (up to a few such pages) and checks there too -- since many
+     universities only publish real postings one click deeper than
+     the page you gave it.
+  5. Flags anything matching that we haven't recorded before as new.
+  6. If a page (and anything it links to) has no matching postings at
+     all, falls back to "page content changed -- check manually",
+     so nothing silently falls through the cracks.
 """
 
+import re
 import hashlib
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
-from config import KEYWORDS, REQUEST_TIMEOUT
+from config import (
+    KEYWORDS,
+    EXCLUDE_EXACT,
+    EXCLUDE_PREFIX_PATTERNS,
+    CONTAINER_LINK_TEXT,
+    MAX_CONTAINER_PAGES_PER_UNIVERSITY,
+    REQUEST_TIMEOUT,
+)
 import db
 
 HEADERS = {
@@ -39,6 +49,8 @@ HEADERS = {
 # characters of visible text, we assume the real content is loaded by
 # JavaScript and fall back to rendering it with a headless browser.
 MIN_TEXT_LENGTH_FOR_STATIC = 250
+
+_EXCLUDE_PREFIX_RE = re.compile("|".join(EXCLUDE_PREFIX_PATTERNS), re.IGNORECASE)
 
 try:
     from playwright.sync_api import sync_playwright
@@ -81,7 +93,22 @@ def render_with_browser(url: str, wait_ms: int = 4000) -> str:
     return html
 
 
-def extract_candidate_items(html: str, base_url: str):
+def fetch_html(url: str) -> str:
+    """Static fetch, escalating to a headless browser if the page looks
+    like an empty JS-app shell."""
+    resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers=HEADERS)
+    resp.raise_for_status()
+    html = resp.text
+    if _visible_text_length(html) < MIN_TEXT_LENGTH_FOR_STATIC and PLAYWRIGHT_AVAILABLE:
+        try:
+            html = render_with_browser(url)
+        except Exception:
+            pass  # keep the static HTML if browser rendering fails
+    return html
+
+
+def extract_all_links(html: str, base_url: str):
+    """Every distinct (text, absolute_url) link on the page."""
     soup = BeautifulSoup(html, "lxml")
     items = []
     seen = set()
@@ -99,9 +126,43 @@ def extract_candidate_items(html: str, base_url: str):
     return items
 
 
+def is_noise(text: str) -> bool:
+    """True if this link text is clearly navigation/boilerplate, never
+    an actual job posting (e.g. 'Career', 'Faculty of Arts', 'Contact')."""
+    t = text.strip().lower()
+    if t in EXCLUDE_EXACT:
+        return True
+    if _EXCLUDE_PREFIX_RE.match(t):
+        return True
+    return False
+
+
 def matches_keywords(text: str) -> bool:
+    if is_noise(text):
+        return False
     t = text.lower()
     return any(k.lower() in t for k in KEYWORDS)
+
+
+def is_container_link(text: str) -> bool:
+    """True if this link's text suggests it leads to a page that lists
+    postings (e.g. 'Career', 'Notice Board') -- worth following once,
+    even though the link text itself isn't a posting."""
+    return text.strip().lower() in CONTAINER_LINK_TEXT
+
+
+def same_site(url_a: str, url_b: str) -> bool:
+    return urlparse(url_a).netloc == urlparse(url_b).netloc
+
+
+def matched_items_from_page(html: str, page_url: str):
+    items = extract_all_links(html, page_url)
+    matched = [(t, u) for t, u in items if matches_keywords(t)]
+    containers = [
+        u for t, u in items
+        if is_container_link(t) and same_site(u, page_url) and u != page_url
+    ]
+    return matched, containers
 
 
 def check_university(uni_row):
@@ -111,33 +172,46 @@ def check_university(uni_row):
     new_postings = []
 
     try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers=HEADERS)
-        resp.raise_for_status()
-        html = resp.text
-        render_mode = "static"
+        main_html = fetch_html(url)
+        all_matched, container_links = matched_items_from_page(main_html, url)
 
-        # If the static HTML looks like an empty JS-app shell (very little
-        # visible text, e.g. Next.js/React sites), re-fetch with a headless
-        # browser so client-side-rendered job listings actually show up.
-        if _visible_text_length(html) < MIN_TEXT_LENGTH_FOR_STATIC and PLAYWRIGHT_AVAILABLE:
+        # Follow a handful of "Career"/"Jobs"/"Notice" style links one
+        # level deep, since many sites only list actual postings there.
+        visited = {url}
+        deduped_containers = []
+        for link in container_links:
+            if link not in visited:
+                visited.add(link)
+                deduped_containers.append(link)
+            if len(deduped_containers) >= MAX_CONTAINER_PAGES_PER_UNIVERSITY:
+                break
+
+        for container_url in deduped_containers:
             try:
-                html = render_with_browser(url)
-                render_mode = "browser"
-            except Exception:
-                pass  # keep the static HTML if browser rendering fails
+                sub_html = fetch_html(container_url)
+                sub_matched, _ = matched_items_from_page(sub_html, container_url)
+                all_matched.extend(sub_matched)
+            except requests.exceptions.RequestException:
+                continue  # a broken sub-link shouldn't fail the whole check
 
-        items = extract_candidate_items(html, url)
-        matched = [(t, u) for t, u in items if matches_keywords(t)]
+        # Dedupe matched items by URL (same posting might appear on both
+        # the main page and a container page it links to).
+        seen_urls = set()
+        unique_matched = []
+        for text, link in all_matched:
+            if link not in seen_urls:
+                seen_urls.add(link)
+                unique_matched.append((text, link))
 
-        if matched:
-            for text, link in matched:
+        if unique_matched:
+            for text, link in unique_matched:
                 item_hash = _hash(f"{url}|{link}|{text}")
                 if not db.posting_exists(item_hash):
                     db.insert_posting(uni_id, text, link, item_hash)
                     new_postings.append((text, link))
         else:
-            # Fallback: whole-page change detection
-            page_hash = _hash(html)
+            # Fallback: whole-page change detection on the main page.
+            page_hash = _hash(main_html)
             prev_hash = db.get_snapshot(uni_id)
             if prev_hash and prev_hash != page_hash:
                 item_hash = _hash(f"{url}|page-change|{page_hash}")
@@ -147,10 +221,7 @@ def check_university(uni_row):
                     new_postings.append((title, url))
             db.update_snapshot(uni_id, page_hash)
 
-        status = "ok" if render_mode == "static" else "ok (rendered with browser)"
-        if render_mode == "static" and _visible_text_length(html) < MIN_TEXT_LENGTH_FOR_STATIC:
-            status = "ok (page looks JS-rendered; install Playwright for full coverage)"
-        db.update_university_status(uni_id, status)
+        db.update_university_status(uni_id, "ok")
 
     except requests.exceptions.RequestException as e:
         db.update_university_status(uni_id, f"error: {type(e).__name__}")
