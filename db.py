@@ -3,6 +3,14 @@ import os
 from datetime import datetime
 from config import DATABASE_PATH
 
+def normalize_url(url: str) -> str:
+    """Add https:// if the user forgot a scheme, so scans never fail
+    with a 'missing scheme' error over something this easy to fix."""
+    url = url.strip()
+    if url and not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+    return url
+
 def get_conn():
     os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
     conn = sqlite3.connect(DATABASE_PATH)
@@ -25,7 +33,7 @@ def seed_universities(seed_list):
             try:
                 conn.execute(
                     "INSERT INTO universities (name, type, url) VALUES (?, ?, ?)",
-                    (u["name"], u.get("type", ""), u["url"]),
+                    (u["name"], u.get("type", ""), normalize_url(u["url"])),
                 )
             except sqlite3.IntegrityError:
                 pass
@@ -45,7 +53,7 @@ def add_university(name, url, type_=""):
     try:
         conn.execute(
             "INSERT INTO universities (name, type, url) VALUES (?, ?, ?)",
-            (name.strip(), type_.strip(), url.strip()),
+            (name.strip(), type_.strip(), normalize_url(url)),
         )
         conn.commit()
         ok = True

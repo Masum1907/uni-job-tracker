@@ -147,6 +147,31 @@ def matched_items_from_page(html: str, page_url: str):
     return matched
 
 
+def _friendly_error(e: Exception) -> str:
+    """Turn a raw exception into a message that actually tells you what
+    to do about it, instead of a bare exception class name."""
+    if isinstance(e, requests.exceptions.MissingSchema):
+        return "error: URL is missing http:// or https:// -- edit it to start with https://"
+    if isinstance(e, requests.exceptions.InvalidURL):
+        return "error: URL looks malformed -- double check it"
+    if isinstance(e, requests.exceptions.SSLError):
+        return "error: SSL/certificate problem on that site"
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return "error: could not connect -- site may be down, or blocking automated requests"
+    if isinstance(e, requests.exceptions.Timeout):
+        return f"error: timed out after {REQUEST_TIMEOUT}s -- site may be slow or unreachable"
+    if isinstance(e, requests.exceptions.HTTPError):
+        code = e.response.status_code if e.response is not None else "?"
+        if code == 403:
+            return "error: HTTP 403 (site is blocking automated requests)"
+        if code == 404:
+            return "error: HTTP 404 (page not found -- check the URL is still correct)"
+        if code and code >= 500:
+            return f"error: HTTP {code} (problem on the university's server, try again later)"
+        return f"error: HTTP {code}"
+    return f"error: {type(e).__name__}: {e}"
+
+
 def check_university(uni_row):
     """uni_row: sqlite3.Row with id, name, url."""
     uni_id = uni_row["id"]
@@ -178,7 +203,7 @@ def check_university(uni_row):
         db.update_university_status(uni_id, "ok")
 
     except requests.exceptions.RequestException as e:
-        db.update_university_status(uni_id, f"error: {type(e).__name__}")
+        db.update_university_status(uni_id, _friendly_error(e))
     except Exception as e:
         db.update_university_status(uni_id, f"error: {e}")
 
