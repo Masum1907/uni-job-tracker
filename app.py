@@ -1,17 +1,51 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+import os
+from functools import wraps
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 
 import db
 import scraper
-from config import SCAN_INTERVAL_MINUTES
+from config import SCAN_INTERVAL_MINUTES, ADMIN_PASSWORD
 from seed_universities import SEED_UNIVERSITIES
 
 app = Flask(__name__)
-app.secret_key = "change-this-to-something-random-if-you-deploy-publicly"
+# On Render: set a SECRET_KEY environment variable to a long random
+# string. Falling back to a fixed value is fine for local testing only.
+app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-in-production")
 
 db.init_db()
 db.seed_universities(SEED_UNIVERSITIES)
+
+
+def admin_required(view_func):
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if not session.get("is_admin"):
+            flash("Please log in to do that.")
+            return redirect(url_for("admin_login", next=request.path))
+        return view_func(*args, **kwargs)
+    return wrapped
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == ADMIN_PASSWORD:
+            session["is_admin"] = True
+            flash("Logged in.")
+            next_url = request.args.get("next") or url_for("universities")
+            return redirect(next_url)
+        flash("Wrong password.")
+    return render_template("admin_login.html")
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.pop("is_admin", None)
+    flash("Logged out.")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/")
@@ -51,6 +85,7 @@ def universities():
 
 
 @app.route("/universities/add", methods=["POST"])
+@admin_required
 def add_university():
     name = request.form.get("name", "").strip()
     url_ = request.form.get("url", "").strip()
@@ -64,6 +99,7 @@ def add_university():
 
 
 @app.route("/universities/bulk-add", methods=["POST"])
+@admin_required
 def bulk_add_universities():
     raw = request.form.get("bulk_text", "")
     added, skipped = 0, 0
@@ -81,6 +117,7 @@ def bulk_add_universities():
 
 
 @app.route("/universities/delete/<int:uni_id>", methods=["POST"])
+@admin_required
 def delete_university(uni_id):
     db.delete_university(uni_id)
     flash("Removed.")

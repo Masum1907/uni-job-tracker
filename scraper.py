@@ -9,29 +9,26 @@ layouts. It does NOT try to parse a specific site's HTML structure
      so those never get flagged as if they were job postings.
   3. Keeps links whose text matches specific hiring phrases (e.g.
      "lecturer", "job circular", "vacancy", "assistant professor").
-  4. If the homepage (or given URL) links to a "Career"/"Jobs"/
-     "Recruitment"/"Notice" style page, it automatically follows that
-     link (up to a few such pages) and checks there too -- since many
-     universities only publish real postings one click deeper than
-     the page you gave it.
-  5. Flags anything matching that we haven't recorded before as new.
-  6. If a page (and anything it links to) has no matching postings at
-     all, falls back to "page content changed -- check manually",
-     so nothing silently falls through the cracks.
+  4. Flags anything matching that we haven't recorded before as new.
+  5. If the page has no matching postings at all, falls back to "page
+     content changed -- check manually", so nothing silently falls
+     through the cracks.
+
+Only the exact URL you give it is scanned -- it never wanders off to
+other pages on the site (no homepage crawling, no following links).
+Give it the specific career/job listing page URL for each university.
 """
 
 import re
 import hashlib
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from config import (
     KEYWORDS,
     EXCLUDE_EXACT,
     EXCLUDE_PREFIX_PATTERNS,
-    CONTAINER_LINK_TEXT,
-    MAX_CONTAINER_PAGES_PER_UNIVERSITY,
     REQUEST_TIMEOUT,
 )
 import db
@@ -144,25 +141,10 @@ def matches_keywords(text: str) -> bool:
     return any(k.lower() in t for k in KEYWORDS)
 
 
-def is_container_link(text: str) -> bool:
-    """True if this link's text suggests it leads to a page that lists
-    postings (e.g. 'Career', 'Notice Board') -- worth following once,
-    even though the link text itself isn't a posting."""
-    return text.strip().lower() in CONTAINER_LINK_TEXT
-
-
-def same_site(url_a: str, url_b: str) -> bool:
-    return urlparse(url_a).netloc == urlparse(url_b).netloc
-
-
 def matched_items_from_page(html: str, page_url: str):
     items = extract_all_links(html, page_url)
     matched = [(t, u) for t, u in items if matches_keywords(t)]
-    containers = [
-        u for t, u in items
-        if is_container_link(t) and same_site(u, page_url) and u != page_url
-    ]
-    return matched, containers
+    return matched
 
 
 def check_university(uni_row):
@@ -173,38 +155,10 @@ def check_university(uni_row):
 
     try:
         main_html = fetch_html(url)
-        all_matched, container_links = matched_items_from_page(main_html, url)
+        matched = matched_items_from_page(main_html, url)
 
-        # Follow a handful of "Career"/"Jobs"/"Notice" style links one
-        # level deep, since many sites only list actual postings there.
-        visited = {url}
-        deduped_containers = []
-        for link in container_links:
-            if link not in visited:
-                visited.add(link)
-                deduped_containers.append(link)
-            if len(deduped_containers) >= MAX_CONTAINER_PAGES_PER_UNIVERSITY:
-                break
-
-        for container_url in deduped_containers:
-            try:
-                sub_html = fetch_html(container_url)
-                sub_matched, _ = matched_items_from_page(sub_html, container_url)
-                all_matched.extend(sub_matched)
-            except requests.exceptions.RequestException:
-                continue  # a broken sub-link shouldn't fail the whole check
-
-        # Dedupe matched items by URL (same posting might appear on both
-        # the main page and a container page it links to).
-        seen_urls = set()
-        unique_matched = []
-        for text, link in all_matched:
-            if link not in seen_urls:
-                seen_urls.add(link)
-                unique_matched.append((text, link))
-
-        if unique_matched:
-            for text, link in unique_matched:
+        if matched:
+            for text, link in matched:
                 item_hash = _hash(f"{url}|{link}|{text}")
                 if not db.posting_exists(item_hash):
                     db.insert_posting(uni_id, text, link, item_hash)
