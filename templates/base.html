@@ -101,6 +101,13 @@
   <nav>
     <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Dashboard</a>
     <a href="{{ url_for('universities') }}" class="{{ 'active' if request.endpoint == 'universities' }}">Manage Universities</a>
+    {% if session.get('is_admin') %}
+      <form method="POST" action="{{ url_for('admin_logout') }}" class="inline" style="display:inline;">
+        <button type="submit" style="background:none; border:none; color:var(--muted); font-size:14px; cursor:pointer; margin-left:18px;">Log out</button>
+      </form>
+    {% else %}
+      <a href="{{ url_for('admin_login') }}">Admin Login</a>
+    {% endif %}
   </nav>
 </header>
 <main>

@@ -2,6 +2,7 @@
 {% block title %}Manage Universities - Uni Job Tracker{% endblock %}
 {% block content %}
 
+{% if session.get('is_admin') %}
 <h2 style="font-size:16px;">Add one university</h2>
 <form method="POST" action="{{ url_for('add_university') }}" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:24px;">
   <input name="name" placeholder="University name" required
@@ -21,6 +22,9 @@
     <button class="btn" type="submit">Add all</button>
   </div>
 </form>
+{% else %}
+<p class="muted"><a href="{{ url_for('admin_login') }}">Log in</a> to add or remove universities.</p>
+{% endif %}
 
 <h2 style="font-size:16px;">Tracked universities ({{ universities|length }})</h2>
 <div style="display:flex; flex-direction:column; gap:8px;">
@@ -41,10 +45,12 @@
         {% endif %}
       </div>
     </div>
+    {% if session.get('is_admin') %}
     <form method="POST" action="{{ url_for('delete_university', uni_id=u.id) }}"
           onsubmit="return confirm('Remove {{ u.name }}?');">
       <button class="btn btn-danger" type="submit">Remove</button>
     </form>
+    {% endif %}
   </div>
 {% endfor %}
 </div>
