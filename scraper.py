@@ -35,9 +35,11 @@ import db
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (compatible; UniJobTracker/1.0; "
-        "personal research/career-monitoring tool)"
-    )
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 # Minimum visible text length before we consider a static fetch to have
@@ -92,10 +94,19 @@ def render_with_browser(url: str, wait_ms: int = 4000) -> str:
 
 def fetch_html(url: str) -> str:
     """Static fetch, escalating to a headless browser if the page looks
-    like an empty JS-app shell."""
-    resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers=HEADERS)
-    resp.raise_for_status()
-    html = resp.text
+    like an empty JS-app shell, OR if the server blocked the plain
+    request (403/429/503 -- common for basic anti-bot protection that a
+    real browser often gets past)."""
+    try:
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers=HEADERS)
+        resp.raise_for_status()
+        html = resp.text
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else None
+        if status in (403, 429, 503) and PLAYWRIGHT_AVAILABLE:
+            return render_with_browser(url)
+        raise
+
     if _visible_text_length(html) < MIN_TEXT_LENGTH_FOR_STATIC and PLAYWRIGHT_AVAILABLE:
         try:
             html = render_with_browser(url)
